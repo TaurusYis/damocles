@@ -241,15 +241,20 @@ if __name__ == "__main__":
     frequencies = processor.models[model_names[0]]['frequencies']
     s_params_dict = {name: processor.models[name]['s_params'] for name in model_names}
 
-    # 3. Plot S-matrix and save figures (multi-model, with legends)
+    # 3. Plot S-matrix and save figures (multi-model, with legends and harmonic markers)
     FIGURES_DIR = "figures"
     EXCEL_FILE = "ddr_report.xlsx"
     NPORTS = 12
     IMG_WIDTH = 1200
     IMG_HEIGHT = 800
+    HARMONIC_FREQ_GHZ = 2.133  # Example: DDR4-3200 fundamental (change as needed)
     if not os.path.exists(FIGURES_DIR):
         os.makedirs(FIGURES_DIR, exist_ok=True)
-    plot_paths = plot_s_matrix_multi(s_params_dict, frequencies, model_names, FIGURES_DIR, nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT)
+    plot_paths = plot_s_matrix_multi(
+        s_params_dict, frequencies, model_names, FIGURES_DIR,
+        nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT,
+        harmonic_freq_ghz=HARMONIC_FREQ_GHZ
+    )
 
     # 4. Create Excel report with embedded figures
     create_excel_with_s_matrix(EXCEL_FILE, plot_paths, nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT)

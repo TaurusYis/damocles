@@ -1,3 +1,8 @@
+# Ignore all files in the sparams directory
+sparams/
+figures/
+*.xlsx
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
