@@ -1,261 +1,294 @@
 #!/usr/bin/env python3
 """
 DDR S-Parameter Analysis Tool
-Main script for analyzing and comparing DDR channel S-parameters
+Main script for analyzing and comparing DDR channel S-parameters using HierarchicalDataCollector
 """
 
 import os
 import numpy as np
-from ddr_s_parameter_analyzer import DDRSParameterAnalyzer
+from data_collector import HierarchicalDataCollector
 from touchstone_generator import create_example_touchstone_files, SPARAMS_DIR
 from touchstone_processor import DDRTouchstoneProcessor
-from plotting_utils import plot_s_matrix_multi, create_excel_with_s_matrix
+from plotting_utils import plot_curves_grid_multi, create_excel_with_s_matrix
 
-def create_sample_touchstone_file(filename: str, nports: int = 24, 
-                                freq_start: float = 1e6, freq_stop: float = 20e9,
-                                n_points: int = 1001):
+def collect_s_matrix_data(processor, model_names, frequencies, nports=12):
     """
-    Create a sample Touchstone file for testing
-    
-    Args:
-        filename: Output filename
-        nports: Number of ports
-        freq_start: Start frequency (Hz)
-        freq_stop: Stop frequency (Hz)
-        n_points: Number of frequency points
+    Use HierarchicalDataCollector to organize S-matrix data
+    Hierarchy: [model, port_pair] - stores S-parameters as metrics
     """
-    frequencies = np.logspace(np.log10(freq_start), np.log10(freq_stop), n_points)
+    collector = HierarchicalDataCollector(["model", "port_pair"])
     
-    with open(filename, 'w') as f:
-        # Write header
-        f.write(f"# GHz S RI R 50\n")
-        f.write("! Sample DDR channel S-parameters\n")
-        f.write("! Frequency(GHz) S(1,1) S(1,2) ... S(1,{}) S(2,1) ... S({},{})\n".format(nports, nports, nports))
+    for model_name in model_names:
+        s_params = processor.models[model_name]['s_params']
         
-        # Write data
-        for freq in frequencies:
-            freq_ghz = freq / 1e9
-            line = f"{freq_ghz:.6f}"
-            
-            # Generate realistic S-parameters
-            for i in range(nports):
-                for j in range(nports):
-                    if i == j:
-                        # Diagonal elements (reflection coefficients)
-                        # Realistic return loss with frequency dependence
-                        s_mag = 0.1 + 0.05 * (freq_ghz / 10)  # Worse at higher frequencies
-                        s_phase = np.random.uniform(-np.pi, np.pi)
-                    else:
-                        # Off-diagonal elements (transmission coefficients)
-                        # Realistic insertion loss and crosstalk
-                        if abs(i - j) == 1:
-                            # Adjacent ports (higher crosstalk)
-                            s_mag = 0.01 + 0.005 * (freq_ghz / 10)
-                        else:
-                            # Non-adjacent ports (lower crosstalk)
-                            s_mag = 0.001 + 0.0005 * (freq_ghz / 10)
-                        s_phase = np.random.uniform(-np.pi, np.pi)
-                    
-                    s_real = s_mag * np.cos(s_phase)
-                    s_imag = s_mag * np.sin(s_phase)
-                    line += f" {s_real:.6e} {s_imag:.6e}"
-            
-            f.write(line + "\n")
+        for row in range(nports):
+            for col in range(nports):
+                s_curve = s_params[:, row, col]
+                s_db = 20 * np.log10(np.abs(s_curve))
+                
+                # Store S-parameter data as metrics for this model/port_pair
+                collector.add(
+                    model_name, 
+                    f"({row+1},{col+1})", 
+                    metric_key="s_parameter_db", 
+                    metric_value=s_db.tolist()
+                )
+                
+                # Store frequency axis
+                collector.add(
+                    model_name,
+                    f"({row+1},{col+1})",
+                    metric_key="frequency_ghz",
+                    metric_value=(frequencies/1e9).tolist()
+                )
     
-    print(f"Created sample Touchstone file: {filename}")
+    return collector
+
+def collect_post_processing_data(processor, model_names, frequencies):
+    """
+    Use HierarchicalDataCollector to organize post-processing data
+    Hierarchy: [model, signal] - stores different metrics (insertion_loss, return_loss, etc.)
+    """
+    collector = HierarchicalDataCollector(["model", "signal"])
+    
+    for model_name in model_names:
+        s_params = processor.models[model_name]['s_params']
+        
+        # Example: Calculate insertion loss for DQ signals (assuming ports 1-8 are DQ)
+        for dq_port in range(1, 9):
+            # S-parameter for DQ port (simplified - you'd use your actual DDR analyzer)
+            s_curve = s_params[:, dq_port-1, dq_port-1]  # Reflection coefficient
+            insertion_loss = -20 * np.log10(np.abs(s_curve))
+            
+            collector.add(
+                model_name,
+                f"DQ{dq_port}",
+                metric_key="insertion_loss",
+                metric_value=insertion_loss.tolist()
+            )
+            
+            # Store frequency axis
+            collector.add(
+                model_name,
+                f"DQ{dq_port}",
+                metric_key="frequency_ghz",
+                metric_value=(frequencies/1e9).tolist()
+            )
+        
+        # Example: Calculate return loss
+        for port in range(1, 13):
+            s_curve = s_params[:, port-1, port-1]
+            return_loss = -20 * np.log10(np.abs(s_curve))
+            
+            collector.add(
+                model_name,
+                f"Port{port}",
+                metric_key="return_loss",
+                metric_value=return_loss.tolist()
+            )
+            
+            # Store frequency axis
+            collector.add(
+                model_name,
+                f"Port{port}",
+                metric_key="frequency_ghz",
+                metric_value=(frequencies/1e9).tolist()
+            )
+    
+    return collector
+
+def extract_data_for_plotting(collector, plot_type="s_matrix"):
+    """
+    Extract data from collector in format suitable for plotting
+    Returns: y_grid, x_data, curve_labels, grid_titles
+    """
+    data = collector.get()
+    
+    if plot_type == "s_matrix":
+        # Extract S-matrix data
+        models = list(data.keys())
+        nports = 12  # Assuming 12 ports
+        
+        y_grid = [[[] for _ in range(nports)] for _ in range(nports)]
+        curve_labels = models
+        x_data = None
+        
+        # Get frequency axis from any model/port_pair
+        for model in models:
+            for port_pair in data[model]:
+                if "frequency_ghz" in data[model][port_pair]:
+                    x_data = data[model][port_pair]["frequency_ghz"]
+                    break
+            if x_data:
+                break
+        
+        # Extract S-parameter curves
+        for model in models:
+            for port_pair in data[model]:
+                try:
+                    # Parse (row,col) format
+                    row_col = port_pair.strip('()')  # Remove parentheses
+                    row, col = map(int, row_col.split(','))
+                    row_idx, col_idx = row - 1, col - 1
+                    
+                    if "s_parameter_db" in data[model][port_pair]:
+                        s_data = data[model][port_pair]["s_parameter_db"]
+                        if s_data:
+                            y_grid[row_idx][col_idx].append(s_data)
+                except:
+                    continue
+        
+        grid_titles = [[f'S{row+1},{col+1}' for col in range(nports)] for row in range(nports)]
+        
+        return y_grid, x_data, curve_labels, grid_titles
+    
+    elif plot_type == "metrics":
+        # Extract metrics data (insertion loss, return loss, etc.)
+        models = list(data.keys())
+        signals = set()
+        metrics = set()
+        
+        # Collect all signals and metrics
+        for model in models:
+            for signal in data[model]:
+                signals.add(signal)
+                for metric_key in data[model][signal]:
+                    if metric_key != "frequency_ghz":
+                        metrics.add(metric_key)
+        
+        signals = sorted(list(signals))
+        metrics = sorted(list(metrics))
+        
+        y_grid = [[[] for _ in range(len(signals))] for _ in range(len(metrics))]
+        curve_labels = models
+        x_data = None
+        
+        # Get frequency axis
+        for model in models:
+            for signal in data[model]:
+                if "frequency_ghz" in data[model][signal]:
+                    x_data = data[model][signal]["frequency_ghz"]
+                    break
+            if x_data:
+                break
+        
+        # Extract curves
+        for model in models:
+            for signal in data[model]:
+                signal_idx = signals.index(signal)
+                for metric in metrics:
+                    if metric in data[model][signal]:
+                        metric_idx = metrics.index(metric)
+                        curve_data = data[model][signal][metric]
+                        if curve_data:
+                            y_grid[metric_idx][signal_idx].append(curve_data)
+        
+        grid_titles = [[f'{metric}\n{signal}' for signal in signals] for metric in metrics]
+        
+        return y_grid, x_data, curve_labels, grid_titles
 
 def main():
-    """
-    Main function demonstrating the DDR S-parameter analyzer
-    """
-    print("DDR S-Parameter Analysis Tool")
-    print("=" * 50)
+    print("DDR S-Parameter Analysis Tool with HierarchicalDataCollector")
+    print("=" * 60)
     
-    # Check if Touchstone files exist, if not generate them
-    if not os.path.exists("CPU_Socket_v1.s24p"):
-        print("Touchstone files not found. Generating them first...")
-        try:
-            from touchstone_generator import create_example_touchstone_files
-            create_example_touchstone_files()
-        except ImportError:
-            print("Error: Could not import touchstone_generator.py")
-            print("Please run: python touchstone_generator.py")
-            return
-    
-    # Create analyzer instance
-    analyzer = DDRSParameterAnalyzer()
-    
-    # Load the models
-    print("\nLoading S-parameter models...")
-    analyzer.read_touchstone_file("CPU_Socket_v1.s24p", "CPU_Socket_v1")
-    analyzer.read_touchstone_file("CPU_Socket_v2.s24p", "CPU_Socket_v2")
-    analyzer.read_touchstone_file("CPU_Socket_v3.s24p", "CPU_Socket_v3")
-    analyzer.read_touchstone_file("Reference_Design.s24p", "Reference_Design")
-    
-    # Define DDR port mapping
-    # Assuming 8 DQ signals and 2 DQS differential pairs
-    dq_ports = [1, 2, 3, 4, 5, 6, 7, 8]  # DQ0-DQ7
-    dqs_ports = [9, 10, 11, 12]  # DQS0+, DQS0-, DQS1+, DQS1-
-    dqs_pairs = [(9, 10), (11, 12)]  # DQS0 and DQS1 differential pairs
-    
-    analyzer.define_ddr_ports(dq_ports, dqs_ports, dqs_pairs)
-    
-    # Generate plots for comparison
-    print("\nGenerating comparison plots...")
-    
-    # Insertion Loss comparison
-    analyzer.plot_metric_comparison('insertion_loss', 'insertion_loss_comparison.png')
-    
-    # Return Loss comparison
-    analyzer.plot_metric_comparison('return_loss', 'return_loss_comparison.png')
-    
-    # TDR comparison
-    analyzer.plot_metric_comparison('tdr', 'tdr_comparison.png')
-    
-    # Crosstalk comparison
-    analyzer.plot_metric_comparison('crosstalk', 'crosstalk_comparison.png')
-    
-    # Export detailed results to Excel
-    print("\nExporting results to Excel...")
-    analyzer.export_to_excel("ddr_analysis_results.xlsx")
-    analyzer.generate_comparison_report("ddr_comparison_report.xlsx")
-    
-    # Generate summary statistics
-    print("\nGenerating summary statistics...")
-    generate_summary_statistics(analyzer)
-    
-    print("\nAnalysis complete!")
-    print("Generated files:")
-    print("  - insertion_loss_comparison.png")
-    print("  - return_loss_comparison.png")
-    print("  - tdr_comparison.png")
-    print("  - crosstalk_comparison.png")
-    print("  - ddr_analysis_results.xlsx")
-    print("  - ddr_comparison_report.xlsx")
-    print("  - summary_statistics.txt")
-
-def generate_summary_statistics(analyzer):
-    """
-    Generate summary statistics for all models
-    """
-    with open("summary_statistics.txt", "w") as f:
-        f.write("DDR Channel Analysis Summary Statistics\n")
-        f.write("=" * 50 + "\n\n")
-        
-        for model_name in analyzer.models.keys():
-            f.write(f"{model_name}:\n")
-            f.write("-" * 30 + "\n")
-            
-            # Insertion Loss Analysis
-            il_data = analyzer.calculate_insertion_loss(model_name)
-            
-            # DQ Insertion Loss
-            dq_ils = [il_data[f'DQ_{i}'] for i in range(1, 9)]
-            dq_il_stats = {
-                'mean': np.mean([np.mean(dq) for dq in dq_ils]),
-                'std': np.mean([np.std(dq) for dq in dq_ils]),
-                'min': np.min([np.min(dq) for dq in dq_ils]),
-                'max': np.max([np.max(dq) for dq in dq_ils])
-            }
-            
-            f.write(f"DQ Insertion Loss:\n")
-            f.write(f"  Mean: {dq_il_stats['mean']:.2f} dB\n")
-            f.write(f"  Std:  {dq_il_stats['std']:.2f} dB\n")
-            f.write(f"  Range: {dq_il_stats['min']:.2f} to {dq_il_stats['max']:.2f} dB\n")
-            
-            # DQS Insertion Loss
-            dqs_ils = [il_data[f'DQS_{i}_diff'] for i in range(1, 3)]
-            dqs_il_stats = {
-                'mean': np.mean([np.mean(dqs) for dqs in dqs_ils]),
-                'std': np.mean([np.std(dqs) for dqs in dqs_ils]),
-                'min': np.min([np.min(dqs) for dqs in dqs_ils]),
-                'max': np.max([np.max(dqs) for dqs in dqs_ils])
-            }
-            
-            f.write(f"DQS Insertion Loss:\n")
-            f.write(f"  Mean: {dqs_il_stats['mean']:.2f} dB\n")
-            f.write(f"  Std:  {dqs_il_stats['std']:.2f} dB\n")
-            f.write(f"  Range: {dqs_il_stats['min']:.2f} to {dqs_il_stats['max']:.2f} dB\n")
-            
-            # Return Loss Analysis
-            rl_data = analyzer.calculate_return_loss(model_name)
-            all_rl = np.concatenate([rl_data[port] for port in rl_data.keys()])
-            rl_stats = {
-                'mean': np.mean(all_rl),
-                'std': np.std(all_rl),
-                'min': np.min(all_rl),
-                'max': np.max(all_rl)
-            }
-            
-            f.write(f"Return Loss:\n")
-            f.write(f"  Mean: {rl_stats['mean']:.2f} dB\n")
-            f.write(f"  Std:  {rl_stats['std']:.2f} dB\n")
-            f.write(f"  Range: {rl_stats['min']:.2f} to {rl_stats['max']:.2f} dB\n")
-            
-            # Crosstalk Analysis
-            xtalk_data = analyzer.calculate_crosstalk(model_name)
-            fext_values = [values for key, values in xtalk_data.items() if key.startswith('FEXT')]
-            next_values = [values for key, values in xtalk_data.items() if key.startswith('NEXT')]
-            
-            if fext_values:
-                worst_fext = np.max([np.max(values) for values in fext_values])
-                f.write(f"Worst FEXT: {worst_fext:.2f} dB\n")
-            
-            if next_values:
-                worst_next = np.max([np.max(values) for values in next_values])
-                f.write(f"Worst NEXT: {worst_next:.2f} dB\n")
-            
-            f.write("\n")
-
-def analyze_real_data():
-    """
-    Function to analyze real Touchstone files
-    Replace the file paths with your actual data
-    """
-    analyzer = DDRSParameterAnalyzer()
-    
-    # Load your real Touchstone files
-    # analyzer.read_touchstone_file("path/to/your/model1.s2p", "Model1_Name")
-    # analyzer.read_touchstone_file("path/to/your/model2.s2p", "Model2_Name")
-    
-    # Define your DDR port mapping
-    # analyzer.define_ddr_ports(dq_ports, dqs_ports, dqs_pairs)
-    
-    # Generate analysis
-    # analyzer.plot_metric_comparison('insertion_loss')
-    # analyzer.export_to_excel("your_analysis_results.xlsx")
-
-if __name__ == "__main__":
     # 1. Generate example Touchstone files
     create_example_touchstone_files()
-
-    # 2. Read and process all Touchstone files in sparams/
+    
+    # 2. Read and process all Touchstone files
     processor = DDRTouchstoneProcessor()
     sparam_files = [f for f in os.listdir(SPARAMS_DIR) if f.endswith('.s24p')]
     model_names = []
+    
     for fname in sparam_files:
         model_name = os.path.splitext(fname)[0]
         processor.read_touchstone_file(os.path.join(SPARAMS_DIR, fname), model_name)
         model_names.append(model_name)
+    
     frequencies = processor.models[model_names[0]]['frequencies']
-    s_params_dict = {name: processor.models[name]['s_params'] for name in model_names}
-
-    # 3. Plot S-matrix and save figures (multi-model, with legends and harmonic markers)
+    print(f"Loaded {len(model_names)} models: {model_names}")
+    
+    # 3. Collect S-matrix data using HierarchicalDataCollector
+    print("\nCollecting S-matrix data...")
+    s_matrix_collector = collect_s_matrix_data(processor, model_names, frequencies)
+    
+    # 4. Collect post-processing data
+    print("Collecting post-processing data...")
+    metrics_collector = collect_post_processing_data(processor, model_names, frequencies)
+    
+    # 5. Save collected data
+    print("Saving collected data...")
+    s_matrix_collector.save_pickle("s_matrix_data.pkl")
+    metrics_collector.save_pickle("metrics_data.pkl")
+    s_matrix_collector.export_to_excel("s_matrix_hierarchical.xlsx")
+    metrics_collector.export_to_excel("metrics_hierarchical.xlsx")
+    
+    # 6. Generate plots
     FIGURES_DIR = "figures"
     EXCEL_FILE = "ddr_report.xlsx"
     NPORTS = 12
     IMG_WIDTH = 1200
     IMG_HEIGHT = 800
-    HARMONIC_FREQ_GHZ = 2.133  # Example: DDR4-3200 fundamental (change as needed)
-    if not os.path.exists(FIGURES_DIR):
-        os.makedirs(FIGURES_DIR, exist_ok=True)
-    plot_paths = plot_s_matrix_multi(
-        s_params_dict, frequencies, model_names, FIGURES_DIR,
-        nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT,
-        harmonic_freq_ghz=HARMONIC_FREQ_GHZ
+    HARMONIC_FREQ_GHZ = 2.133
+    
+    os.makedirs(FIGURES_DIR, exist_ok=True)
+    
+    # Plot S-matrix
+    print("Generating S-matrix plots...")
+    result = extract_data_for_plotting(s_matrix_collector, "s_matrix")
+    if result is None:
+        print("Error: Failed to extract data for plotting")
+        return
+    
+    y_grid, x_data, curve_labels, grid_titles = result
+    
+    # Ensure we have frequency data
+    if x_data is None:
+        print("Warning: No frequency data found, using default frequency range")
+        x_data = np.linspace(0, 20, 1001)  # Default 0-20 GHz range
+    
+    # Add harmonic markers
+    marker_vlines = [HARMONIC_FREQ_GHZ, 3*HARMONIC_FREQ_GHZ] if HARMONIC_FREQ_GHZ else None
+    marker_texts = [['' for _ in range(NPORTS)] for _ in range(NPORTS)]
+    
+    if marker_vlines and x_data is not None:
+        for row in range(NPORTS):
+            for col in range(NPORTS):
+                if y_grid[row][col]:
+                    harmonics = [HARMONIC_FREQ_GHZ, 3 * HARMONIC_FREQ_GHZ]
+                    marker_texts_1st = [f"1st Harmonic ({harmonics[0]:.2f} GHz):"]
+                    marker_texts_3rd = [f"3rd Harmonic ({harmonics[1]:.2f} GHz):"]
+                    
+                    for i, model in enumerate(curve_labels):
+                        if i < len(y_grid[row][col]):
+                            y_db = y_grid[row][col][i]
+                            idx1 = np.argmin(np.abs(np.array(x_data) - harmonics[0]))
+                            idx3 = np.argmin(np.abs(np.array(x_data) - harmonics[1]))
+                            marker_texts_1st.append(f"  {model}: {y_db[idx1]:.2f} dB")
+                            marker_texts_3rd.append(f"  {model}: {y_db[idx3]:.2f} dB")
+                    
+                    marker_texts[row][col] = '\n'.join(marker_texts_1st) + '\n\n' + '\n'.join(marker_texts_3rd)
+    
+    plot_paths = plot_curves_grid_multi(
+        y_grid, x_data, curve_labels, FIGURES_DIR, grid_titles=grid_titles,
+        xlabel='Freq (GHz)', ylabel='S(row,col) (dB)', 
+        img_width=IMG_WIDTH, img_height=IMG_HEIGHT,
+        nrows=NPORTS, ncols=NPORTS, marker_texts=marker_texts, 
+        marker_vlines=marker_vlines, legend_loc='best', tight_rect=[0, 0, 0.75, 1]
     )
+    
+    # 7. Create Excel report
+    print("Creating Excel report...")
+    create_excel_with_s_matrix(EXCEL_FILE, plot_paths, nports=NPORTS, 
+                              img_width=IMG_WIDTH, img_height=IMG_HEIGHT)
+    
+    print(f"\nWorkflow complete!")
+    print(f"Generated files:")
+    print(f"  - {EXCEL_FILE} (main report)")
+    print(f"  - {FIGURES_DIR}/ (plot images)")
+    print(f"  - s_matrix_data.pkl (pickled S-matrix data)")
+    print(f"  - metrics_data.pkl (pickled metrics data)")
+    print(f"  - s_matrix_hierarchical.xlsx (S-matrix data inspection)")
+    print(f"  - metrics_hierarchical.xlsx (metrics data inspection)")
 
-    # 4. Create Excel report with embedded figures
-    create_excel_with_s_matrix(EXCEL_FILE, plot_paths, nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT)
-
-    print(f"Workflow complete. See {EXCEL_FILE} and {FIGURES_DIR}/") 
+if __name__ == "__main__":
+    main() 

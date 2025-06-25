@@ -64,8 +64,14 @@ class HierarchicalDataCollector:
 
     # ---- Save / Load Data ----
     def save_pickle(self, file_path):
+        # Convert defaultdict to regular dict for pickling
+        def convert_defaultdict_to_dict(d):
+            if isinstance(d, defaultdict):
+                return {k: convert_defaultdict_to_dict(v) for k, v in d.items()}
+            return d
+        
         with open(file_path, 'wb') as f:
-            pickle.dump(dict(self.data), f)
+            pickle.dump(convert_defaultdict_to_dict(self.data), f)
 
     def load_pickle(self, file_path):
         with open(file_path, 'rb') as f:
@@ -98,6 +104,9 @@ class HierarchicalDataCollector:
         df = pd.DataFrame(rows)
         Path(excel_path).parent.mkdir(parents=True, exist_ok=True)
         df.to_excel(excel_path, index=False)
+
+    def get(self):
+        return self.data
 
 
 
