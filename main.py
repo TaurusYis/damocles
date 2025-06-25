@@ -75,12 +75,11 @@ def main():
     if not os.path.exists("CPU_Socket_v1.s24p"):
         print("Touchstone files not found. Generating them first...")
         try:
-            from generate_touchstone_files import create_ddr_touchstone_files, create_small_test_files
-            create_ddr_touchstone_files()
-            create_small_test_files()
+            from touchstone_generator import create_example_touchstone_files
+            create_example_touchstone_files()
         except ImportError:
-            print("Error: Could not import generate_touchstone_files.py")
-            print("Please run: python generate_touchstone_files.py")
+            print("Error: Could not import touchstone_generator.py")
+            print("Please run: python touchstone_generator.py")
             return
     
     # Create analyzer instance

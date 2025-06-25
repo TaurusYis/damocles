@@ -2,6 +2,7 @@
 plotting_utils.py
 Module for plotting S-parameter curves, metrics, and embedding figures in Excel.
 """
+from typing import Optional, List
 import os
 import matplotlib.pyplot as plt
 import xlsxwriter
@@ -35,7 +36,7 @@ def plot_curves_grid_multi(
     nrows = nrows or len(y_grid)
     ncols = ncols or len(y_grid[0])
     dpi = plt.rcParams.get('figure.dpi', 100)
-    plot_paths = [[None for _ in range(ncols)] for _ in range(nrows)]
+    plot_paths: List[List[Optional[str]]] = [[None for _ in range(ncols)] for _ in range(nrows)]
     for row in range(nrows):
         for col in range(ncols):
             plt.figure(figsize=(img_width/dpi, img_height/dpi))
@@ -74,7 +75,7 @@ def plot_s_matrix(s_params, frequencies, out_dir, nports=12, img_width=1200, img
     Returns a 2D list of image file paths.
     """
     os.makedirs(out_dir, exist_ok=True)
-    plot_paths = [[None for _ in range(nports)] for _ in range(nports)]
+    plot_paths: List[List[Optional[str]]] = [[None for _ in range(nports)] for _ in range(nports)]
     dpi = plt.rcParams.get('figure.dpi', 100)
     for row in range(nports):
         for col in range(nports):
@@ -103,7 +104,7 @@ def plot_s_matrix_multi(s_params_dict, frequencies, model_names, out_dir, nports
     dpi = plt.rcParams.get('figure.dpi', 100)
     # Prepare y_grid: nports x nports x nmodels
     y_grid = [[[] for _ in range(nports)] for _ in range(nports)]
-    marker_texts = [[None for _ in range(nports)] for _ in range(nports)]
+    marker_texts: List[List[Optional[str]]] = [[None for _ in range(nports)] for _ in range(nports)]
     marker_vlines = None
     if harmonic_freq_ghz is not None:
         marker_vlines = [harmonic_freq_ghz, 3*harmonic_freq_ghz]
@@ -149,7 +150,7 @@ def create_excel_with_s_matrix(excel_file, plot_paths, nports=12, img_width=1200
         worksheet.set_row(row, row_height)
     for row in range(nports):
         for col in range(nports):
-            cell = xlsxwriter.utility.xl_rowcol_to_cell(row, col)
+            cell = xlsxwriter.utility.xl_rowcol_to_cell(row, col)  # type: ignore
             worksheet.insert_image(cell, plot_paths[row][col],
                                   {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
     worksheet2 = workbook.add_worksheet("metrics of interest")
