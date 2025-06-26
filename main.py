@@ -9,7 +9,9 @@ import numpy as np
 from data_collector import HierarchicalDataCollector
 from touchstone_generator import create_example_touchstone_files, SPARAMS_DIR
 from touchstone_processor import DDRTouchstoneProcessor
-from plotting_utils import plot_curves_grid_multi, create_excel_with_s_matrix, generate_harmonic_marker_texts
+from plotting_utils import (plot_curves_grid_multi, create_excel_with_s_matrix, 
+                           generate_harmonic_marker_texts, create_excel_with_metrics_sheet,
+                           generate_metrics_grid_plots, plot_s_matrix_multi)
 
 def collect_s_matrix_data(processor, model_names, frequencies, nports=12):
     """
@@ -44,60 +46,85 @@ def collect_s_matrix_data(processor, model_names, frequencies, nports=12):
     
     return collector
 
-def collect_post_processing_data(processor, model_names, frequencies):
+def collect_ddr_metrics_data(processor, model_names, frequencies):
     """
-    Use HierarchicalDataCollector to organize post-processing data
-    Hierarchy: [model, signal] - stores different metrics (insertion_loss, return_loss, etc.)
+    Use HierarchicalDataCollector to organize comprehensive DDR metrics data
+    Hierarchy: [model, signal] - stores different metrics for DDR analysis
+    
+    DQ0-DQ7: ports 1-8 (left), 13-20 (right)
+    DQS0-, DQS0+, DQS1-, DQS1+: ports 9,10,11,12 (left), 21,22,23,24 (right)
     """
     collector = HierarchicalDataCollector(["model", "signal"])
     
+    dq_left_ports = list(range(1, 9))   # DQ0-DQ7 left
+    dq_right_ports = list(range(13, 21)) # DQ0-DQ7 right
+    dqs_left_ports = {"DQS0-": 9, "DQS0+": 10, "DQS1-": 11, "DQS1+": 12}
+    dqs_right_ports = {"DQS0-": 21, "DQS0+": 22, "DQS1-": 23, "DQS1+": 24}
+    dq_names = [f"DQ{i}" for i in range(8)]
+    dqs_names = ["DQS0-", "DQS0+", "DQS1-", "DQS1+"]
+    signal_names = dq_names + dqs_names
+    
     for model_name in model_names:
         s_params = processor.models[model_name]['s_params']
-        
-        # Example: Calculate insertion loss for DQ signals (assuming ports 1-8 are DQ)
-        for dq_port in range(1, 9):
-            # S-parameter for DQ port (simplified - you'd use your actual DDR analyzer)
-            s_curve = s_params[:, dq_port-1, dq_port-1]  # Reflection coefficient
+        # DQ signals (left side)
+        for i, dq_port in enumerate(dq_left_ports):
+            port_idx = dq_port - 1
+            s_curve = s_params[:, port_idx, port_idx]
             insertion_loss = -20 * np.log10(np.abs(s_curve))
-            
-            collector.add(
-                model_name,
-                f"DQ{dq_port}",
-                metric_key="insertion_loss",
-                metric_value=insertion_loss.tolist()
-            )
-            
-            # Store frequency axis
-            collector.add(
-                model_name,
-                f"DQ{dq_port}",
-                metric_key="frequency_ghz",
-                metric_value=(frequencies/1e9).tolist()
-            )
-        
-        # Example: Calculate return loss
-        for port in range(1, 13):
-            s_curve = s_params[:, port-1, port-1]
-            return_loss = -20 * np.log10(np.abs(s_curve))
-            
-            collector.add(
-                model_name,
-                f"Port{port}",
-                metric_key="return_loss",
-                metric_value=return_loss.tolist()
-            )
-            
-            # Store frequency axis
-            collector.add(
-                model_name,
-                f"Port{port}",
-                metric_key="frequency_ghz",
-                metric_value=(frequencies/1e9).tolist()
-            )
-    
+            collector.add(model_name, f"DQ{i}", metric_key="insertion_loss", metric_value=insertion_loss.tolist())
+            return_loss_left = -20 * np.log10(np.abs(s_curve))
+            collector.add(model_name, f"DQ{i}", metric_key="return_loss_left", metric_value=return_loss_left.tolist())
+            return_loss_right = return_loss_left
+            collector.add(model_name, f"DQ{i}", metric_key="return_loss_right", metric_value=return_loss_right.tolist())
+            # FEXT/NEXT/PSFEXT/PSNEXT (left side, simplified as before)
+            fext_values = []
+            for j, other_port in enumerate(dq_left_ports):
+                if j != i:
+                    other_idx = other_port - 1
+                    fext_curve = s_params[:, other_idx, port_idx]
+                    fext_db = 20 * np.log10(np.abs(fext_curve))
+                    fext_values.append(fext_db)
+            if fext_values:
+                worst_fext = np.maximum.reduce(fext_values)
+                collector.add(model_name, f"DQ{i}", metric_key="fext", metric_value=worst_fext.tolist())
+                psfext = 10 * np.log10(np.sum([10**(fext/10) for fext in fext_values], axis=0))
+                collector.add(model_name, f"DQ{i}", metric_key="psfext", metric_value=psfext.tolist())
+            next_values = []
+            for j, other_port in enumerate(dq_left_ports):
+                if j != i:
+                    other_idx = other_port - 1
+                    next_curve = s_params[:, port_idx, other_idx]
+                    next_db = 20 * np.log10(np.abs(next_curve))
+                    next_values.append(next_db)
+            if next_values:
+                worst_next = np.maximum.reduce(next_values)
+                collector.add(model_name, f"DQ{i}", metric_key="next_left", metric_value=worst_next.tolist())
+                collector.add(model_name, f"DQ{i}", metric_key="next_right", metric_value=worst_next.tolist())
+                psnext = 10 * np.log10(np.sum([10**(next/10) for next in next_values], axis=0))
+                collector.add(model_name, f"DQ{i}", metric_key="psnext_left", metric_value=psnext.tolist())
+                collector.add(model_name, f"DQ{i}", metric_key="psnext_right", metric_value=psnext.tolist())
+            collector.add(model_name, f"DQ{i}", metric_key="frequency_ghz", metric_value=(frequencies/1e9).tolist())
+        # DQS signals (left side)
+        for dqs_name, dqs_port in dqs_left_ports.items():
+            port_idx = dqs_port - 1
+            s_curve = s_params[:, port_idx, port_idx]
+            insertion_loss = -20 * np.log10(np.abs(s_curve))
+            collector.add(model_name, dqs_name, metric_key="insertion_loss", metric_value=insertion_loss.tolist())
+            return_loss_left = -20 * np.log10(np.abs(s_curve))
+            collector.add(model_name, dqs_name, metric_key="return_loss_left", metric_value=return_loss_left.tolist())
+            return_loss_right = return_loss_left
+            collector.add(model_name, dqs_name, metric_key="return_loss_right", metric_value=return_loss_right.tolist())
+            # FEXT/NEXT/PSFEXT/PSNEXT (placeholders)
+            collector.add(model_name, dqs_name, metric_key="fext", metric_value=(-40 * np.ones_like(frequencies)).tolist())
+            collector.add(model_name, dqs_name, metric_key="psfext", metric_value=(-40 * np.ones_like(frequencies)).tolist())
+            collector.add(model_name, dqs_name, metric_key="next_left", metric_value=(-40 * np.ones_like(frequencies)).tolist())
+            collector.add(model_name, dqs_name, metric_key="next_right", metric_value=(-40 * np.ones_like(frequencies)).tolist())
+            collector.add(model_name, dqs_name, metric_key="psnext_left", metric_value=(-40 * np.ones_like(frequencies)).tolist())
+            collector.add(model_name, dqs_name, metric_key="psnext_right", metric_value=(-40 * np.ones_like(frequencies)).tolist())
+            collector.add(model_name, dqs_name, metric_key="frequency_ghz", metric_value=(frequencies/1e9).tolist())
     return collector
 
-def extract_data_for_plotting(collector, plot_type="s_matrix"):
+def extract_data_for_plotting(collector, plot_type="s_matrix", nports=12):
     """
     Extract data from collector in format suitable for plotting
     Returns: y_grid, x_data, curve_labels, grid_titles
@@ -107,7 +134,7 @@ def extract_data_for_plotting(collector, plot_type="s_matrix"):
     if plot_type == "s_matrix":
         # Extract S-matrix data
         models = list(data.keys())
-        nports = 12  # Assuming 12 ports
+        nports = nports  # Assuming 12 ports
         
         y_grid = [[[] for _ in range(nports)] for _ in range(nports)]
         curve_labels = models
@@ -209,11 +236,11 @@ def main():
     
     # 3. Collect S-matrix data using HierarchicalDataCollector
     print("\nCollecting S-matrix data...")
-    s_matrix_collector = collect_s_matrix_data(processor, model_names, frequencies)
+    s_matrix_collector = collect_s_matrix_data(processor, model_names, frequencies, nports=24)
     
-    # 4. Collect post-processing data
-    print("Collecting post-processing data...")
-    metrics_collector = collect_post_processing_data(processor, model_names, frequencies)
+    # 4. Collect DDR metrics data
+    print("Collecting DDR metrics data...")
+    metrics_collector = collect_ddr_metrics_data(processor, model_names, frequencies)
     
     # 5. Save collected data
     print("Saving collected data...")
@@ -225,43 +252,48 @@ def main():
     # 6. Generate plots
     FIGURES_DIR = "figures"
     EXCEL_FILE = "ddr_report.xlsx"
-    NPORTS = 12
+    NPORTS = 24
     IMG_WIDTH = 1200
     IMG_HEIGHT = 800
     HARMONIC_FREQ_GHZ = 2.133
     
-    os.makedirs(FIGURES_DIR, exist_ok=True)
+    S_MATRIX_FIG_DIR = "figures/s_matrix"
+    METRICS_FIG_DIR = "figures/metrics"
+    os.makedirs(S_MATRIX_FIG_DIR, exist_ok=True)
+    os.makedirs(METRICS_FIG_DIR, exist_ok=True)
     
     # Plot S-matrix
     print("Generating S-matrix plots...")
-    result = extract_data_for_plotting(s_matrix_collector, "s_matrix")
+    result = extract_data_for_plotting(s_matrix_collector, "s_matrix", nports=NPORTS)
     if result is None:
         print("Error: Failed to extract data for plotting")
         return
     
     y_grid, x_data, curve_labels, grid_titles = result
     
-    # Ensure we have frequency data
     if x_data is None:
         print("Warning: No frequency data found, using default frequency range")
-        x_data = np.linspace(0, 20, 1001)  # Default 0-20 GHz range
+        x_data = np.linspace(0, 20, 1001)
     
-    # Add harmonic markers
-    marker_vlines = [HARMONIC_FREQ_GHZ, 3*HARMONIC_FREQ_GHZ] if HARMONIC_FREQ_GHZ else None
-    marker_texts = generate_harmonic_marker_texts(y_grid, x_data, curve_labels, HARMONIC_FREQ_GHZ, NPORTS, NPORTS)
-    
-    plot_paths = plot_curves_grid_multi(
-        y_grid, x_data, curve_labels, FIGURES_DIR, grid_titles=grid_titles,
-        xlabel='Freq (GHz)', ylabel='S(row,col) (dB)', 
-        img_width=IMG_WIDTH, img_height=IMG_HEIGHT,
-        nrows=NPORTS, ncols=NPORTS, marker_texts=marker_texts, 
-        marker_vlines=marker_vlines, legend_loc='best', tight_rect=[0, 0, 0.75, 1]
+    s_params_dict = {model: processor.models[model]['s_params'] for model in model_names}
+    s_matrix_plot_paths = plot_s_matrix_multi(
+        s_params_dict, frequencies, model_names, S_MATRIX_FIG_DIR,
+        nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT,
+        harmonic_freq_ghz=HARMONIC_FREQ_GHZ
     )
     
-    # 7. Create Excel report
-    print("Creating Excel report...")
-    create_excel_with_s_matrix(EXCEL_FILE, plot_paths, nports=NPORTS, 
-                              img_width=IMG_WIDTH, img_height=IMG_HEIGHT)
+    # Generate metrics plots
+    print("Generating metrics plots...")
+    metrics_plot_paths = generate_metrics_grid_plots(
+        metrics_collector, METRICS_FIG_DIR, 
+        img_width=IMG_WIDTH, img_height=IMG_HEIGHT,
+        harmonic_freq_ghz=HARMONIC_FREQ_GHZ
+    )
+    
+    # 7. Create Excel report with both sheets
+    print("Creating Excel report with metrics sheet...")
+    create_excel_with_metrics_sheet(EXCEL_FILE, s_matrix_plot_paths, metrics_plot_paths,
+                                   nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT)
     
     print(f"\nWorkflow complete!")
     print(f"Generated files:")

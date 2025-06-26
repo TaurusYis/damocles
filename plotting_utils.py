@@ -194,4 +194,114 @@ def generate_harmonic_marker_texts(y_grid, x_data, curve_labels, harmonic_freq_g
                 
                 marker_texts[row][col] = '\n'.join(marker_texts_1st) + '\n\n' + '\n'.join(marker_texts_3rd)
     
-    return marker_texts 
+    return marker_texts
+
+def generate_metrics_grid_plots(collector, out_dir, img_width=1200, img_height=800, harmonic_freq_ghz=None):
+    """
+    Generate a grid of metrics plots using plot_curves_grid_multi.
+    
+    Args:
+        collector: HierarchicalDataCollector with metrics data
+        out_dir: Directory to save plots
+        img_width, img_height: Image dimensions
+        harmonic_freq_ghz: Harmonic frequency for markers
+    
+    Returns:
+        Dictionary mapping "metric_signal" to plot file path
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    data = collector.get()
+    models = list(data.keys())
+    metrics = [
+        "insertion_loss",
+        "return_loss_left", 
+        "return_loss_right",
+        "fext",
+        "psfext", 
+        "next_left",
+        "psnext_left",
+        "next_right", 
+        "psnext_right"
+    ]
+    signals = [f"DQ{i}" for i in range(8)] + ["DQS0-", "DQS0+", "DQS1-", "DQS1+"]
+    y_grid = [[[] for _ in range(len(signals))] for _ in range(len(metrics))]
+    x_data = None
+    for model in models:
+        for signal in data[model]:
+            if "frequency_ghz" in data[model][signal]:
+                x_data = data[model][signal]["frequency_ghz"]
+                break
+        if x_data:
+            break
+    for metric_idx, metric in enumerate(metrics):
+        for signal_idx, signal in enumerate(signals):
+            for model in models:
+                if signal in data[model] and metric in data[model][signal]:
+                    curve_data = data[model][signal][metric]
+                    if curve_data:
+                        y_grid[metric_idx][signal_idx].append(curve_data)
+    grid_titles = [[f'{metric.replace("_", " ").title()}\n{signal}' for signal in signals] for metric in metrics]
+    marker_vlines = [harmonic_freq_ghz, 3*harmonic_freq_ghz] if harmonic_freq_ghz else None
+    marker_texts = generate_harmonic_marker_texts(y_grid, x_data, models, harmonic_freq_ghz, len(metrics), len(signals))
+    plot_paths = plot_curves_grid_multi(
+        y_grid, x_data, models, out_dir, grid_titles=grid_titles,
+        xlabel='Freq (GHz)', ylabel='Metric (dB)', 
+        img_width=img_width, img_height=img_height,
+        nrows=len(metrics), ncols=len(signals), marker_texts=marker_texts, 
+        marker_vlines=marker_vlines, legend_loc='best', tight_rect=[0, 0, 0.75, 1]
+    )
+    metrics_plot_paths = {}
+    for metric_idx, metric in enumerate(metrics):
+        for signal_idx, signal in enumerate(signals):
+            # Save each plot with a unique filename
+            plot_key = f"{metric}_{signal}"
+            fig_path = os.path.join(out_dir, f"{plot_key}.png")
+            # Copy or rename the plot to the unique filename if needed
+            orig_path = plot_paths[metric_idx][signal_idx]
+            if orig_path and orig_path != fig_path:
+                import shutil
+                shutil.copyfile(orig_path, fig_path)
+            if os.path.exists(fig_path):
+                metrics_plot_paths[plot_key] = fig_path
+    return metrics_plot_paths
+
+def create_excel_with_metrics_sheet(excel_file, s_matrix_plot_paths, metrics_plot_paths, nports=12, img_width=1200, img_height=800):
+    workbook = xlsxwriter.Workbook(excel_file)
+    worksheet1 = workbook.add_worksheet("s-matrix")
+    col_width = (img_width / 7.5) * 1.08
+    row_height = img_height * 0.75
+    for col in range(nports):
+        worksheet1.set_column(col, col, col_width)
+    for row in range(nports):
+        worksheet1.set_row(row, row_height)
+    for row in range(nports):
+        for col in range(nports):
+            cell = xlsxwriter.utility.xl_rowcol_to_cell(row, col)  # type: ignore
+            worksheet1.insert_image(cell, s_matrix_plot_paths[row][col],
+                                  {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
+    worksheet2 = workbook.add_worksheet("metrics of interest")
+    metrics = [
+        "insertion_loss",
+        "return_loss_left", 
+        "return_loss_right",
+        "fext",
+        "psfext", 
+        "next_left",
+        "psnext_left",
+        "next_right", 
+        "psnext_right"
+    ]
+    signals = [f"DQ{i}" for i in range(8)] + ["DQS0-", "DQS0+", "DQS1-", "DQS1+"]
+    for col in range(len(signals)):
+        worksheet2.set_column(col, col, col_width)
+    for row in range(len(metrics)):
+        worksheet2.set_row(row, row_height)
+    if metrics_plot_paths:
+        for row, metric in enumerate(metrics):
+            for col, signal in enumerate(signals):
+                plot_key = f"{metric}_{signal}"
+                if plot_key in metrics_plot_paths:
+                    cell = xlsxwriter.utility.xl_rowcol_to_cell(row, col)  # type: ignore
+                    worksheet2.insert_image(cell, metrics_plot_paths[plot_key],
+                                          {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
+    workbook.close() 
