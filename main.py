@@ -9,7 +9,7 @@ import numpy as np
 from data_collector import HierarchicalDataCollector
 from touchstone_generator import create_example_touchstone_files, SPARAMS_DIR
 from touchstone_processor import DDRTouchstoneProcessor
-from plotting_utils import plot_curves_grid_multi, create_excel_with_s_matrix
+from plotting_utils import plot_curves_grid_multi, create_excel_with_s_matrix, generate_harmonic_marker_texts
 
 def collect_s_matrix_data(processor, model_names, frequencies, nports=12):
     """
@@ -248,25 +248,7 @@ def main():
     
     # Add harmonic markers
     marker_vlines = [HARMONIC_FREQ_GHZ, 3*HARMONIC_FREQ_GHZ] if HARMONIC_FREQ_GHZ else None
-    marker_texts = [['' for _ in range(NPORTS)] for _ in range(NPORTS)]
-    
-    if marker_vlines and x_data is not None:
-        for row in range(NPORTS):
-            for col in range(NPORTS):
-                if y_grid[row][col]:
-                    harmonics = [HARMONIC_FREQ_GHZ, 3 * HARMONIC_FREQ_GHZ]
-                    marker_texts_1st = [f"1st Harmonic ({harmonics[0]:.2f} GHz):"]
-                    marker_texts_3rd = [f"3rd Harmonic ({harmonics[1]:.2f} GHz):"]
-                    
-                    for i, model in enumerate(curve_labels):
-                        if i < len(y_grid[row][col]):
-                            y_db = y_grid[row][col][i]
-                            idx1 = np.argmin(np.abs(np.array(x_data) - harmonics[0]))
-                            idx3 = np.argmin(np.abs(np.array(x_data) - harmonics[1]))
-                            marker_texts_1st.append(f"  {model}: {y_db[idx1]:.2f} dB")
-                            marker_texts_3rd.append(f"  {model}: {y_db[idx3]:.2f} dB")
-                    
-                    marker_texts[row][col] = '\n'.join(marker_texts_1st) + '\n\n' + '\n'.join(marker_texts_3rd)
+    marker_texts = generate_harmonic_marker_texts(y_grid, x_data, curve_labels, HARMONIC_FREQ_GHZ, NPORTS, NPORTS)
     
     plot_paths = plot_curves_grid_multi(
         y_grid, x_data, curve_labels, FIGURES_DIR, grid_titles=grid_titles,

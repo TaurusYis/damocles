@@ -155,4 +155,43 @@ def create_excel_with_s_matrix(excel_file, plot_paths, nports=12, img_width=1200
                                   {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
     worksheet2 = workbook.add_worksheet("metrics of interest")
     worksheet2.write(0, 0, "(Plots for metrics of interest will be added here)")
-    workbook.close() 
+    workbook.close()
+
+def generate_harmonic_marker_texts(y_grid, x_data, curve_labels, harmonic_freq_ghz, nrows, ncols):
+    """
+    Generate marker texts for harmonic frequencies.
+    
+    Args:
+        y_grid: 2D list of lists of y-values
+        x_data: frequency axis data
+        curve_labels: list of curve labels (model names)
+        harmonic_freq_ghz: fundamental harmonic frequency in GHz
+        nrows, ncols: grid dimensions
+    
+    Returns:
+        2D list of marker text strings
+    """
+    marker_texts = [['' for _ in range(ncols)] for _ in range(nrows)]
+    
+    if harmonic_freq_ghz is None or x_data is None:
+        return marker_texts
+    
+    harmonics = [harmonic_freq_ghz, 3 * harmonic_freq_ghz]
+    
+    for row in range(nrows):
+        for col in range(ncols):
+            if y_grid[row][col]:
+                marker_texts_1st = [f"1st Harmonic ({harmonics[0]:.2f} GHz):"]
+                marker_texts_3rd = [f"3rd Harmonic ({harmonics[1]:.2f} GHz):"]
+                
+                for i, model in enumerate(curve_labels):
+                    if i < len(y_grid[row][col]):
+                        y_db = y_grid[row][col][i]
+                        idx1 = np.argmin(np.abs(np.array(x_data) - harmonics[0]))
+                        idx3 = np.argmin(np.abs(np.array(x_data) - harmonics[1]))
+                        marker_texts_1st.append(f"  {model}: {y_db[idx1]:.2f} dB")
+                        marker_texts_3rd.append(f"  {model}: {y_db[idx3]:.2f} dB")
+                
+                marker_texts[row][col] = '\n'.join(marker_texts_1st) + '\n\n' + '\n'.join(marker_texts_3rd)
+    
+    return marker_texts 
