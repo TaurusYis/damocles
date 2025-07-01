@@ -104,30 +104,25 @@ def plot_s_matrix_multi(s_params_dict, frequencies, model_names, out_dir, nports
     dpi = plt.rcParams.get('figure.dpi', 100)
     # Prepare y_grid: nports x nports x nmodels
     y_grid = [[[] for _ in range(nports)] for _ in range(nports)]
-    marker_texts: List[List[Optional[str]]] = [[None for _ in range(nports)] for _ in range(nports)]
     marker_vlines = None
     if harmonic_freq_ghz is not None:
         marker_vlines = [harmonic_freq_ghz, 3*harmonic_freq_ghz]
+    
     for row in range(nports):
         for col in range(nports):
             for model_name in model_names:
                 s_curve = s_params_dict[model_name][:, row, col]
                 y_db = 20 * np.log10(np.abs(s_curve))
                 y_grid[row][col].append(y_db)
-            # Prepare marker text for this subplot
-            if harmonic_freq_ghz is not None:
-                harmonics = [harmonic_freq_ghz, 3 * harmonic_freq_ghz]
-                marker_texts_1st = [f"1st Harmonic ({harmonics[0]:.2f} GHz):"]
-                marker_texts_3rd = [f"3rd Harmonic ({harmonics[1]:.2f} GHz):"]
-                for i, model_name in enumerate(model_names):
-                    y_db = y_grid[row][col][i]
-                    idx1 = np.argmin(np.abs(frequencies / 1e9 - harmonics[0]))
-                    idx3 = np.argmin(np.abs(frequencies / 1e9 - harmonics[1]))
-                    marker_texts_1st.append(f"  {model_name}: {y_db[idx1]:.2f} dB")
-                    marker_texts_3rd.append(f"  {model_name}: {y_db[idx3]:.2f} dB")
-                marker_texts[row][col] = '\n'.join(marker_texts_1st) + '\n\n' + '\n'.join(marker_texts_3rd)
+    
     x = frequencies / 1e9
     grid_titles = [[f'S{row+1},{col+1}' for col in range(nports)] for row in range(nports)]
+    
+    # Generate marker texts using the existing function
+    marker_texts = None
+    if harmonic_freq_ghz is not None:
+        marker_texts = generate_harmonic_marker_texts(y_grid, x, model_names, harmonic_freq_ghz, nports, nports)
+    
     return plot_curves_grid_multi(
         y_grid, x, model_names, out_dir, grid_titles=grid_titles,
         xlabel='Freq (GHz)', ylabel='S(row,col) (dB)', img_width=img_width, img_height=img_height,
@@ -265,8 +260,86 @@ def generate_metrics_grid_plots(collector, out_dir, img_width=1200, img_height=8
                 metrics_plot_paths[plot_key] = fig_path
     return metrics_plot_paths
 
-def create_excel_with_metrics_sheet(excel_file, s_matrix_plot_paths, metrics_plot_paths, nports=12, img_width=1200, img_height=800):
+def generate_tdr_grid_plots(tdr_collector, model_names, out_dir, img_width=1200, img_height=800):
+    """
+    Generate TDR plots using plot_curves_grid_multi from HierarchicalDataCollector data.
+    
+    Args:
+        tdr_collector: HierarchicalDataCollector with TDR data
+        model_names: List of model names
+        out_dir: Directory to save plots
+        img_width, img_height: Image dimensions
+    
+    Returns:
+        Dictionary mapping signal names to plot file paths for left and right sides
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    
+    # Signal names in order: DQ0-DQ7, DQS0-, DQS0+, DQS1-, DQS1+
+    signal_names = [f"DQ{i}" for i in range(8)] + ["DQS0-", "DQS0+", "DQS1-", "DQS1+"]
+    
+    # Prepare data for left side (row 0) and right side (row 1)
+    y_grid = [[[] for _ in range(len(signal_names))] for _ in range(2)]  # 2 rows (left/right), ncols signals
+    x_data = None
+    
+    # Get data from collector
+    collector_data = tdr_collector.get()
+    
+    for col, signal_name in enumerate(signal_names):
+        # Get time axis from any model (should be the same for all)
+        for model_name in model_names:
+            if model_name in collector_data and signal_name in collector_data[model_name]:
+                if "time_axis_ns" in collector_data[model_name][signal_name]:
+                    x_data = collector_data[model_name][signal_name]["time_axis_ns"]
+                    break
+        if x_data:
+            break
+    
+    # Extract TDR data for each signal and side
+    for col, signal_name in enumerate(signal_names):
+        for model_name in model_names:
+            if model_name in collector_data and signal_name in collector_data[model_name]:
+                signal_data = collector_data[model_name][signal_name]
+                
+                # Left side TDR (row 0)
+                if "tdr_left" in signal_data:
+                    y_grid[0][col].append(signal_data["tdr_left"])
+                
+                # Right side TDR (row 1)
+                if "tdr_right" in signal_data:
+                    y_grid[1][col].append(signal_data["tdr_right"])
+    
+    # Generate plots using the existing function
+    grid_titles = [
+        [f'{signal_name}\n(Left Side)' for signal_name in signal_names],  # Row 0: Left side
+        [f'{signal_name}\n(Right Side)' for signal_name in signal_names]  # Row 1: Right side
+    ]
+    
+    plot_paths = plot_curves_grid_multi(
+        y_grid, x_data, model_names, out_dir, grid_titles=grid_titles,
+        xlabel='Time (ns)', ylabel='TDR Magnitude', 
+        img_width=img_width, img_height=img_height,
+        nrows=2, ncols=len(signal_names), legend_loc='best', tight_rect=[0, 0, 0.75, 1]
+    )
+    
+    # Convert to the expected format for Excel
+    tdr_plot_paths = {}
+    
+    for col, signal_name in enumerate(signal_names):
+        # Left side (row 0)
+        if plot_paths[0][col]:
+            tdr_plot_paths[f"{signal_name}_left"] = plot_paths[0][col]
+        
+        # Right side (row 1)
+        if plot_paths[1][col]:
+            tdr_plot_paths[f"{signal_name}_right"] = plot_paths[1][col]
+    
+    return tdr_plot_paths
+
+def create_excel_with_metrics_sheet(excel_file, s_matrix_plot_paths, metrics_plot_paths, tdr_plot_paths=None, nports=12, img_width=1200, img_height=800):
     workbook = xlsxwriter.Workbook(excel_file)
+    
+    # S-matrix sheet
     worksheet1 = workbook.add_worksheet("s-matrix")
     col_width = (img_width / 7.5) * 1.08
     row_height = img_height * 0.75
@@ -279,6 +352,8 @@ def create_excel_with_metrics_sheet(excel_file, s_matrix_plot_paths, metrics_plo
             cell = xlsxwriter.utility.xl_rowcol_to_cell(row, col)  # type: ignore
             worksheet1.insert_image(cell, s_matrix_plot_paths[row][col],
                                   {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
+    
+    # Metrics sheet
     worksheet2 = workbook.add_worksheet("metrics of interest")
     metrics = [
         "insertion_loss",
@@ -304,4 +379,46 @@ def create_excel_with_metrics_sheet(excel_file, s_matrix_plot_paths, metrics_plo
                     cell = xlsxwriter.utility.xl_rowcol_to_cell(row, col)  # type: ignore
                     worksheet2.insert_image(cell, metrics_plot_paths[plot_key],
                                           {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
+    
+    # TDR sheet
+    if tdr_plot_paths:
+        worksheet3 = workbook.add_worksheet("TDR")
+        signals = [f"DQ{i}" for i in range(8)] + ["DQS0", "DQS1"]
+        
+        # Set column widths for signals
+        for col in range(len(signals)):
+            worksheet3.set_column(col, col, col_width)
+        
+        # Set row heights for left and right side TDR
+        worksheet3.set_row(0, row_height)  # Left side TDR
+        worksheet3.set_row(1, row_height)  # Right side TDR
+        
+        # Add TDR plots
+        for col, signal in enumerate(signals):
+            # Handle DQS signals (combine + and -)
+            if signal == "DQS0":
+                # Use DQS0- for left side, DQS0+ for right side
+                left_plot_key = "DQS0-_left"
+                right_plot_key = "DQS0+_right"
+            elif signal == "DQS1":
+                # Use DQS1- for left side, DQS1+ for right side
+                left_plot_key = "DQS1-_left"
+                right_plot_key = "DQS1+_right"
+            else:
+                # DQ signals use left and right side plots
+                left_plot_key = f"{signal}_left"
+                right_plot_key = f"{signal}_right"
+            
+            # Left side TDR (row 0)
+            if left_plot_key in tdr_plot_paths:
+                cell = xlsxwriter.utility.xl_rowcol_to_cell(0, col)  # type: ignore
+                worksheet3.insert_image(cell, tdr_plot_paths[left_plot_key],
+                                      {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
+            
+            # Right side TDR (row 1)
+            if right_plot_key in tdr_plot_paths:
+                cell = xlsxwriter.utility.xl_rowcol_to_cell(1, col)  # type: ignore
+                worksheet3.insert_image(cell, tdr_plot_paths[right_plot_key],
+                                      {'x_scale': 1, 'y_scale': 1, 'object_position': 1})
+    
     workbook.close() 
