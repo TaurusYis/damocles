@@ -3,6 +3,10 @@
 DDR S-Parameter Analysis Tool
 Main script for analyzing and comparing DDR channel S-parameters using modular architecture.
 Now supports easy integration with external programs: you can feed your own processed data directly.
+
+API Functions:
+- run_report_from_external_data_simplified(): Simplified API - only requires S-matrix and TDR data
+- run_report_from_external_data(): Full API - requires S-matrix, metrics, and TDR data
 """
 
 import os
@@ -241,6 +245,71 @@ def run_report_from_external_data(s_matrix_data, metrics_data, tdr_data, model_n
                                    nports=NPORTS, img_width=IMG_WIDTH, img_height=IMG_HEIGHT)
     print(f"\nExternal data report complete!\n  - {EXCEL_FILE}\n  - {FIGURES_DIR}/ (plot images)")
 
+def run_report_from_external_data_simplified(s_matrix_data, tdr_data, model_names, output_prefix="external_report"):
+    """
+    Generate plots and Excel report from externally provided data (simplified API).
+    Metrics are calculated internally from S-matrix data.
+    
+    Args:
+        s_matrix_data: dict of S-matrix data (model_name -> ...)
+        tdr_data: dict of TDR data (model_name -> ...)
+        model_names: list of model names (order for plotting)
+        output_prefix: prefix for output files (default: 'external_report')
+    """
+    print("Calculating metrics from S-matrix data...")
+    
+    # Import the post-processor for metrics calculation
+    from s_parameter_processor import SParameterPostProcessor
+    
+    # Calculate metrics internally from S-matrix data
+    post_processor = SParameterPostProcessor()
+    metrics_data = {}
+    
+    for model_name in model_names:
+        if model_name in s_matrix_data:
+            # Extract S-parameters and frequencies from the provided data
+            # We need to reconstruct the S-parameters array from the organized data
+            s_matrix_model_data = s_matrix_data[model_name]
+            
+            # Find the frequency data
+            frequencies = None
+            for port_pair in s_matrix_model_data:
+                if "frequency_ghz" in s_matrix_model_data[port_pair]:
+                    frequencies = np.array(s_matrix_model_data[port_pair]["frequency_ghz"]) * 1e9  # Convert back to Hz
+                    break
+            
+            if frequencies is None:
+                print(f"Warning: No frequency data found for model {model_name}, skipping metrics calculation")
+                continue
+            
+            # Reconstruct S-parameters array
+            nports = int(np.sqrt(len(s_matrix_model_data)))
+            nfreq = len(frequencies)
+            s_params = np.zeros((nfreq, nports, nports), dtype=complex)
+            
+            for port_pair in s_matrix_model_data:
+                if "s_parameter_db" in s_matrix_model_data[port_pair]:
+                    try:
+                        # Parse (row,col) format
+                        row_col = port_pair.strip('()')  # Remove parentheses
+                        row, col = map(int, row_col.split(','))
+                        row_idx, col_idx = row - 1, col - 1
+                        
+                        # Convert dB back to linear and reconstruct complex S-parameters
+                        s_db = np.array(s_matrix_model_data[port_pair]["s_parameter_db"])
+                        s_mag = 10**(s_db / 20)
+                        # For simplicity, assume zero phase (or you could store phase separately)
+                        s_params[:, row_idx, col_idx] = s_mag
+                    except:
+                        continue
+            
+            # Calculate metrics using the post-processor
+            metrics_data[model_name] = post_processor.process_ddr_metrics(s_params, frequencies, model_name)
+    
+    print("✓ Metrics calculated from S-matrix data")
+    
+    # Call the original function with all three data types (S-matrix, calculated metrics, and TDR)
+    run_report_from_external_data(s_matrix_data, metrics_data, tdr_data, model_names, output_prefix)
 
 def run_full_workflow():
     """

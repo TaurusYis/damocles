@@ -13,7 +13,8 @@ A modular Python tool for generating, processing, and visualizing DDR channel S-
 
 ```
 .
-├── main.py                  # Main workflow script
+├── main.py                  # Main workflow script (includes simplified API)
+├── example_simplified_api.py # Example of using the simplified API
 ├── touchstone_generator.py  # Generate example Touchstone files
 ├── touchstone_processor.py  # Read/process Touchstone files, calculate metrics
 ├── plotting_utils.py        # Plotting and Excel embedding utilities
@@ -56,34 +57,55 @@ You can use your own code to load/process Touchstone files or generate S-paramet
 
 ### **Minimal Example: Generate a Report from Your Own Data**
 
+#### **Simplified API (Recommended)**
 ```python
-from main import run_report_from_external_data
+from main import run_report_from_external_data_simplified
 
 # Prepare your data as dictionaries (see below for structure)
 s_matrix_data = { ... }   # dict: model_name -> s-matrix data
-metrics_data = { ... }    # dict: model_name -> metrics data
 tdr_data = { ... }        # dict: model_name -> TDR data
 model_names = [ ... ]     # list of model names (order for plotting)
 
-# Call the API to generate plots and Excel report
-run_report_from_external_data(
+# Call the simplified API - metrics are calculated automatically from S-matrix data
+run_report_from_external_data_simplified(
     s_matrix_data,
-    metrics_data,
     tdr_data,
     model_names,
     output_prefix="my_external_analysis"  # Optional: prefix for output files
 )
 ```
 
+#### **Full API (if you want to provide pre-calculated metrics)**
+```python
+from main import run_report_from_external_data
+
+# Prepare your data as dictionaries
+s_matrix_data = { ... }   # dict: model_name -> s-matrix data
+metrics_data = { ... }    # dict: model_name -> metrics data (optional)
+tdr_data = { ... }        # dict: model_name -> TDR data
+model_names = [ ... ]     # list of model names (order for plotting)
+
+# Call the full API
+run_report_from_external_data(
+    s_matrix_data,
+    metrics_data,
+    tdr_data,
+    model_names,
+    output_prefix="my_external_analysis"
+)
+```
+
 #### **Data Structure Example**
-- `s_matrix_data`, `metrics_data`, and `tdr_data` should follow the same structure as produced by the internal workflow. See the code in `s_parameter_processor.py` for details, or run the internal workflow once and inspect the generated `*_data.pkl` files for examples.
-- **Minimal required fields:**
-  - `s_matrix_data[model_name]["(row,col)"]["s_parameter_db"]` (list of dB values)
-  - `metrics_data[model_name][signal]["insertion_loss"]`, etc.
-  - `tdr_data[model_name][signal]["tdr_left"]`, `tdr_right`, `time_axis_ns`, etc.
+- **S-matrix data**: `s_matrix_data[model_name]["(row,col)"]["s_parameter_db"]` (list of dB values)
+- **TDR data**: `tdr_data[model_name][signal]["tdr_left"]`, `tdr_right`, `time_axis_ns`, etc.
+- **Metrics data**: Automatically calculated from S-matrix data using the same algorithms as the internal workflow
+- See the code in `s_parameter_processor.py` for details, or run the internal workflow once and inspect the generated `*_data.pkl` files for examples.
 
 #### **Tip:**
 You can use the `HierarchicalDataCollector` and `DataOrganizer` utilities to help organize your data if needed.
+
+#### **Example Script:**
+Run `python example_simplified_api.py` to see a complete example of using the simplified API with minimal data preparation.
 
 ## Customization
 
