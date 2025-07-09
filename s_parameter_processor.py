@@ -6,6 +6,61 @@ This module is designed to be easily replaceable with other analysis methods.
 import numpy as np
 from typing import Dict, List, Tuple, Any
 from tdr_analyzer import calculate_tdr_from_s_params
+import numpy as np
+from scipy.interpolate import interp1d
+
+def process_invalid_data(
+    y_values: np.ndarray,
+    x_axis: np.ndarray,
+    method: str = 'linear',
+    detect_spikes: bool = False,
+    spike_threshold: float = 5.0
+) -> np.ndarray:
+    """
+    Replace invalid (NaN, inf, spikes) entries in y_values using interpolation.
+
+    Args:
+        y_values: 1D array of signal data with possible invalid entries.
+        x_axis: 1D array of the same length representing time or frequency.
+        method: Interpolation method: 'linear', 'nearest', 'cubic', etc.
+        detect_spikes: Whether to detect spikes based on threshold.
+        spike_threshold: Number of std-devs from mean to consider a spike.
+
+    Returns:
+        A new array with invalid values filled via interpolation.
+    """
+    import numpy as np
+    from scipy.interpolate import interp1d
+    
+    if y_values.shape != x_axis.shape:
+        raise ValueError("x_axis and y_values must have the same shape")
+
+    y_clean = y_values.copy()
+
+    # 1. Mask invalids: NaNs and infs
+    invalid_mask = ~np.isfinite(y_clean)
+
+    # 2. Optionally detect spikes (outliers)
+    if detect_spikes:
+        valid_y = y_clean[~invalid_mask]
+        mean = np.mean(valid_y)
+        std = np.std(valid_y)
+        spike_mask = np.abs(y_clean - mean) > spike_threshold * std
+        invalid_mask |= spike_mask
+
+    # 3. Build interpolation function over valid data
+    valid_x = x_axis[~invalid_mask]
+    valid_y = y_clean[~invalid_mask]
+
+    if len(valid_x) < 2:
+        raise ValueError("Not enough valid points for interpolation.")
+
+    interpolator = interp1d(valid_x, valid_y, kind=method, fill_value='extrapolate')
+
+    # 4. Fill invalid values
+    y_clean[invalid_mask] = interpolator(x_axis[invalid_mask])
+
+    return y_clean
 
 class SParameterPostProcessor:
     """
